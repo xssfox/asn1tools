@@ -40,6 +40,7 @@ class Type(BaseType):
         super().__init__(name, type_name)
         self.module_name = None
         self.tag = None
+        self.isBitField = False
 
     def set_size_range(self, minimum, maximum, has_extension_marker):
         pass
@@ -66,6 +67,7 @@ class Decoder(object):
         raise NotImplemented
 
 class MembersType(Type):
+     # TODO THIS IS FROM PER AND NEEDS TO ADJUSTED
 
     def __init__(self,
                  name,
@@ -73,6 +75,14 @@ class MembersType(Type):
                  additions,
                  type_name):
         super(MembersType, self).__init__(name, type_name)
+        self.root_members = root_members
+        self.additions = additions
+        self.optionals = [
+            member
+            for member in root_members
+            if member.optional or member.default is not None
+        ]
+
 
 class ArrayType(Type):
 
@@ -260,20 +270,55 @@ class OffsetAndBitField():
 
     """
     def __init__(self):
-        self.required = False
-    def addBitField(self):
-        raise NotImplemented
+        self.off_required = False
+        self.__bitCount = 0
+        self.__bits = []
+
+    def checkOffRequired(self, type_name: str, members=None):
+        if type_name in [
+            'BIT STRING',
+        ]:
+            self.off_required = True
+        if (members and [(x.optional or x.has_default) and x.isBitField for x in members]):
+            self.off_required = True
+    def addBitField(self, bit: bool):
+        self.__bits.append(bit)
     def __bytes__(self):
         """
         Return the offset field (if required) and Bit Field (BIF)
         """
+        if self.off_required:
+            if (    len(self.__bits) == 0 or
+                    (len(self.__bits) > 6 and 
+                     len(self.__bits) > 8*63
+                     )
+                ):
+                output = bytes([0b10])
+            elif len(self.__bits) < 7:
+                output = bytes([0b0])
+            else:
+                output = bytes([0b11])
+        else:
+            output = b''
 
+        print("NOT REALLY IMPLEMENTED")
 
-        raise NotImplemented
+        return output
+
+class Choice(Type):
+
+    def __init__(self, name, root_members, additions):
+        super(Choice, self).__init__(name, 'CHOICE')
+
 
 class Compiler(compiler.Compiler):
 
+    # TODO THIS IS FROM PER AND NEEDS TO ADJUSTED
+
+    
+
     def process_type(self, type_name, type_descriptor, module_name):
+
         compiled_type = self.compile_type(type_name,
                                           type_descriptor,
                                           module_name)
@@ -422,6 +467,13 @@ class Compiler(compiler.Compiler):
                                                        type_descriptor,
                                                        module_name)
 
+        compiled.offset_field = OffsetAndBitField()
+        # check if we need BIF
+        if compiled is MembersType:
+            compiled.offset_field.checkOffRequired(type_name, compiled.root_members)
+        else:
+            compiled.offset_field.checkOffRequired(type_name)
+        breakpoint()
         return compiled
 
     def set_compiled_tag(self, compiled, type_descriptor):

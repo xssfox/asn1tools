@@ -122,7 +122,7 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
     def test_offset_field_required(self):
         a = OffsetAndBitField()
-        a.required = True
+        a.off_required = True
         encoded = bytes(a)
         
         assert len(encoded) == 1
@@ -133,20 +133,32 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
         assert len(encoded) == 0
     def test_offset_bitfield(self):
         a = OffsetAndBitField()
-        a.addBitField()
+        a.addBitField(True)
         encoded = bytes(a)
-        assert encoded & 0b0000_0001 == 0b0
+        assert encoded[0] & 0b0000_0001 == 0b0
 
         for x in range(7): # add 7 more bits, to overflow the offset field
-            a.addBitField()
-        encoded = bytes(a)
-        assert encoded & 0b0000_0011 == 0b10
+            a.addBitField(1)
+        encoded = bytes(True)
+        assert encoded[0] & 0b0000_0011 == 0b10
 
         for x in range(64*8): # more than 64 ocets of bif
-            a.addBitField()
+            a.addBitField(True)
         encoded = bytes(a)
-        assert encoded & 0b0000_0011 == 0b11
+        assert encoded[0] & 0b0000_0011 == 0b11
     
+
+    def test_seq_optional_bit(self):
+        foo = asn1tools.compile_string(
+            """
+            US5638066 DEFINITIONS ::= BEGIN
+            Employees ::= SEQUENCE OF PersonalRecord
+            PersonalRecord ::= SEQUENCE {
+                a BOOLEAN OPTIONAL
+            }
+            END
+            """, "eper"
+        )
 
         
     def test_encode_normal_integer():
