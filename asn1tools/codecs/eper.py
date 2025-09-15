@@ -32,7 +32,7 @@ from .permitted_alphabet import PRINTABLE_STRING
 from .permitted_alphabet import IA5_STRING
 from .permitted_alphabet import BMP_STRING
 from .permitted_alphabet import VISIBLE_STRING
-from .per import PermittedAlphabet
+from .per import PermittedAlphabet, AdditionGroup, CompiledType
 
 class Type(BaseType):
 
@@ -57,7 +57,8 @@ class KnownMultiplierStringType(Type):
                  maximum=None,
                  has_extension_marker=False,
                  permitted_alphabet=None):
-        raise NotImplemented
+        super(KnownMultiplierStringType, self).__init__(name,
+                                                        self.__class__.__name__)
 
 class Decoder(object):
 
@@ -71,7 +72,7 @@ class MembersType(Type):
                  root_members,
                  additions,
                  type_name):
-        raise NotImplemented
+        super(MembersType, self).__init__(name, type_name)
 
 class ArrayType(Type):
 
@@ -82,23 +83,21 @@ class ArrayType(Type):
                  maximum,
                  has_extension_marker,
                  type_name):
-        raise NotImplemented
-
+        super(ArrayType, self).__init__(name, type_name)
 class Boolean(Type):
 
     def __init__(self, name):
         super(Boolean, self).__init__(name, 'BOOLEAN')
-        raise NotImplemented
 
 class Integer(Type):
 
     def __init__(self, name):
-        raise NotImplemented
+        super(Integer, self).__init__(name, 'INTEGER')
     
 class Null(Type):
 
     def __init__(self, name):
-        raise NotImplemented
+        super(Null, self).__init__(name, 'NULL')
 
 class BitString(Type):
 
@@ -108,17 +107,17 @@ class BitString(Type):
                  minimum,
                  maximum,
                  has_extension_marker):
-        NotImplemented
+        super(BitString, self).__init__(name, 'BIT STRING')
 
 class OctetString(Type):
 
     def __init__(self, name, minimum, maximum, has_extension_marker):
-        raise NotImplemented
+        super(OctetString, self).__init__(name, 'OCTET STRING')
     
 class Enumerated(Type):
 
     def __init__(self, name, values, numeric):
-        raise NotImplemented
+        super(Enumerated, self).__init__(name, 'ENUMERATED')
     
 class Sequence(MembersType):
 
@@ -126,7 +125,10 @@ class Sequence(MembersType):
                  name,
                  root_members,
                  additions):
-        raise NotImplemented
+        super(Sequence, self).__init__(name,
+                                       root_members,
+                                       additions,
+                                       'SEQUENCE')
 
 class SequenceOf(ArrayType):
 
@@ -136,7 +138,12 @@ class SequenceOf(ArrayType):
                  minimum,
                  maximum,
                  has_extension_marker):
-        raise NotImplemented
+        super(SequenceOf, self).__init__(name,
+                                         element_type,
+                                         minimum,
+                                         maximum,
+                                         has_extension_marker,
+                                         'SEQUENCE OF')
 
 class Set(MembersType):
 
@@ -144,7 +151,10 @@ class Set(MembersType):
                  name,
                  root_members,
                  additions):
-        raise NotImplemented
+        super(Set, self).__init__(name,
+                                  root_members,
+                                  additions,
+                                  'SET')
     
 class SetOf(ArrayType):
 
@@ -154,13 +164,18 @@ class SetOf(ArrayType):
                  minimum,
                  maximum,
                  has_extension_marker):
-        raise NotImplemented
+        super(SetOf, self).__init__(name,
+                                    element_type,
+                                    minimum,
+                                    maximum,
+                                    has_extension_marker,
+                                    'SET OF')
     
 
 class UTF8String(Type):
 
     def __init__(self, name):
-        raise NotImplemented
+        super(UTF8String, self).__init__(name, 'UTF8String')
     
 class NumericString(KnownMultiplierStringType):
 
@@ -228,32 +243,247 @@ class UniversalString(StringType):
     LENGTH_MULTIPLIER = 4
 
 class Compiler(compiler.Compiler):
+
     def process_type(self, type_name, type_descriptor, module_name):
-        raise NotImplemented
+        compiled_type = self.compile_type(type_name,
+                                          type_descriptor,
+                                          module_name)
+
+        return CompiledType(compiled_type)
 
     def compile_type(self, name, type_descriptor, module_name):
-        raise NotImplemented
+        module_name = self.get_module_name(type_descriptor, module_name)
+        type_name = type_descriptor['type']
+
+        if type_name == 'SEQUENCE':
+            compiled = Sequence(
+                name,
+                *self.compile_members(type_descriptor['members'],
+                                      module_name))
+        elif type_name == 'SEQUENCE OF':
+            compiled = SequenceOf(name,
+                                  self.compile_type('',
+                                                    type_descriptor['element'],
+                                                    module_name),
+                                  *self.get_size_range(type_descriptor,
+                                                       module_name))
+        elif type_name == 'SET':
+            compiled = Set(
+                name,
+                *self.compile_members(type_descriptor['members'],
+                                      module_name,
+                                      sort_by_tag=True))
+        elif type_name == 'SET OF':
+            compiled = SetOf(name,
+                             self.compile_type('',
+                                               type_descriptor['element'],
+                                               module_name),
+                             *self.get_size_range(type_descriptor,
+                                                  module_name))
+        elif type_name == 'CHOICE':
+            compiled = Choice(name,
+                              *self.compile_members(
+                                  type_descriptor['members'],
+                                  module_name,
+                                  flat_additions=True))
+        elif type_name == 'INTEGER':
+            compiled = Integer(name)
+        elif type_name == 'REAL':
+            compiled = Real(name)
+        elif type_name == 'ENUMERATED':
+            compiled = Enumerated(name,
+                                  self.get_enum_values(type_descriptor,
+                                                       module_name),
+                                  self._numeric_enums)
+        elif type_name == 'BOOLEAN':
+            compiled = Boolean(name)
+        elif type_name == 'OBJECT IDENTIFIER':
+            compiled = ObjectIdentifier(name)
+        elif type_name == 'OCTET STRING':
+            compiled = OctetString(name,
+                                   *self.get_size_range(type_descriptor,
+                                                        module_name))
+        elif type_name == 'TeletexString':
+            compiled = TeletexString(name)
+        elif type_name == 'NumericString':
+            permitted_alphabet = self.get_permitted_alphabet(type_descriptor)
+            compiled = NumericString(name,
+                                     *self.get_size_range(type_descriptor,
+                                                          module_name),
+                                     permitted_alphabet=permitted_alphabet)
+        elif type_name == 'PrintableString':
+            permitted_alphabet = self.get_permitted_alphabet(type_descriptor)
+            compiled = PrintableString(name,
+                                       *self.get_size_range(type_descriptor,
+                                                            module_name),
+                                       permitted_alphabet=permitted_alphabet)
+        elif type_name == 'IA5String':
+            permitted_alphabet = self.get_permitted_alphabet(type_descriptor)
+            compiled = IA5String(name,
+                                 *self.get_size_range(type_descriptor,
+                                                      module_name),
+                                 permitted_alphabet=permitted_alphabet)
+        elif type_name == 'BMPString':
+            permitted_alphabet = self.get_permitted_alphabet(type_descriptor)
+            compiled = BMPString(name,
+                                 *self.get_size_range(type_descriptor,
+                                                      module_name),
+                                 permitted_alphabet=permitted_alphabet)
+        elif type_name == 'VisibleString':
+            permitted_alphabet = self.get_permitted_alphabet(type_descriptor)
+            compiled = VisibleString(name,
+                                     *self.get_size_range(type_descriptor,
+                                                          module_name),
+                                     permitted_alphabet=permitted_alphabet)
+        elif type_name == 'GeneralString':
+            compiled = GeneralString(name)
+        elif type_name == 'UTF8String':
+            compiled = UTF8String(name)
+        elif type_name == 'GraphicString':
+            compiled = GraphicString(name)
+        elif type_name == 'UTCTime':
+            compiled = UTCTime(name)
+        elif type_name == 'UniversalString':
+            compiled = UniversalString(name)
+        elif type_name == 'GeneralizedTime':
+            compiled = GeneralizedTime(name)
+        elif type_name == 'DATE':
+            compiled = Date(name)
+        elif type_name == 'TIME-OF-DAY':
+            compiled = TimeOfDay(name)
+        elif type_name == 'DATE-TIME':
+            compiled = DateTime(name)
+        elif type_name == 'BIT STRING':
+            compiled = BitString(name,
+                                 self.get_named_bits(type_descriptor,
+                                                     module_name),
+                                 *self.get_size_range(type_descriptor,
+                                                      module_name))
+        elif type_name == 'ANY':
+            compiled = Any(name)
+        elif type_name == 'ANY DEFINED BY':
+            compiled = Any(name)
+        elif type_name == 'NULL':
+            compiled = Null(name)
+        elif type_name == 'OpenType':
+            compiled = OpenType(name)
+        elif type_name == 'EXTERNAL':
+            compiled = Sequence(
+                name,
+                *self.compile_members(self.external_type_descriptor()['members'],
+                                      module_name))
+        elif type_name == 'ObjectDescriptor':
+            compiled = ObjectDescriptor(name)
+        else:
+            if type_name in self.types_backtrace:
+                compiled = Recursive(name,
+                                     type_name,
+                                     module_name)
+                self.recursive_types.append(compiled)
+            else:
+                compiled = self.compile_user_type(name,
+                                                  type_name,
+                                                  module_name)
+
+        if 'tag' in type_descriptor:
+            compiled = self.set_compiled_tag(compiled, type_descriptor)
+
+        if 'restricted-to' in type_descriptor:
+            compiled = self.set_compiled_restricted_to(compiled,
+                                                       type_descriptor,
+                                                       module_name)
+
+        return compiled
 
     def set_compiled_tag(self, compiled, type_descriptor):
-        raise NotImplemented
-    
+        compiled = self.copy(compiled)
+        tag = type_descriptor['tag']
+        class_prio = CLASS_PRIO[tag.get('class', 'CONTEXT_SPECIFIC')]
+        class_number = tag['number']
+        compiled.tag = (class_prio, class_number)
+
+        return compiled
+
     def compile_members(self,
                         members,
                         module_name,
                         sort_by_tag=False,
                         flat_additions=False):
-        raise NotImplemented
+        compiled_members = []
+        in_extension = False
+        additions = None
+
+        for member in members:
+            if member == EXTENSION_MARKER:
+                in_extension = not in_extension
+
+                if in_extension:
+                    additions = []
+            elif in_extension:
+                self.compile_extension_member(member,
+                                              module_name,
+                                              additions,
+                                              flat_additions)
+            else:
+                self.compile_root_member(member,
+                                         module_name,
+                                         compiled_members)
+
+        if sort_by_tag:
+            compiled_members = sorted(compiled_members, key=attrgetter('tag'))
+
+        return compiled_members, additions
+
     def compile_extension_member(self,
                                  member,
                                  module_name,
                                  additions,
                                  flat_additions):
-        raise NotImplemented
+        if isinstance(member, list):
+            if flat_additions:
+                for memb in member:
+                    compiled_member = self.compile_member(memb,
+                                                          module_name)
+                    additions.append(compiled_member)
+            else:
+                compiled_member, _ = self.compile_members(member,
+                                                          module_name)
+                compiled_group = AdditionGroup('ExtensionAddition',
+                                               compiled_member,
+                                               None)
+                additions.append(compiled_group)
+        else:
+            compiled_member = self.compile_member(member,
+                                                  module_name)
+            additions.append(compiled_member)
+
     def get_permitted_alphabet(self, type_descriptor):
-        raise NotImplemented
+        def char_range(begin, end):
+            return ''.join([chr(char)
+                            for char in range(ord(begin), ord(end) + 1)])
+
+        if 'from' not in type_descriptor:
+            return
+
+        permitted_alphabet = type_descriptor['from']
+        value = ''
+
+        for item in permitted_alphabet:
+            if isinstance(item, tuple):
+                value += char_range(item[0], item[1])
+            else:
+                value += item
+
+        value = sorted(value)
+        encode_map = {ord(v): i for i, v in enumerate(value)}
+        decode_map = {i: ord(v) for i, v in enumerate(value)}
+
+        return PermittedAlphabet(encode_map, decode_map)
+
 
 def compile_dict(specification, numeric_enums=False):
-    raise NotImplemented
+    return Compiler(specification, numeric_enums).process()
+
 
 def decode_full_length(_data):
-    raise NotImplemented
+    raise DecodeError('Decode length is not supported for this codec.')
