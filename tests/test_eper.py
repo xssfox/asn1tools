@@ -6,7 +6,7 @@ from .utils import Asn1ToolsBaseTest
 import asn1tools
 import sys
 from copy import deepcopy
-import .codec.eper
+from asn1tools.codecs import eper
 
 sys.path.append('tests/files')
 sys.path.append('tests/files/3gpp')
@@ -157,7 +157,7 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
         # 2nd octet: 00 000000 -- in hex: 00
         encoder = eper.Encoder()
         foo = integer.encode(data, encoder)
-        00 011110
+        #00 011110
 
 
 if __name__ == '__main__':
