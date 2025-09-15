@@ -473,7 +473,6 @@ class Compiler(compiler.Compiler):
             compiled.offset_field.checkOffRequired(type_name, compiled.root_members)
         else:
             compiled.offset_field.checkOffRequired(type_name)
-        breakpoint()
         return compiled
 
     def set_compiled_tag(self, compiled, type_descriptor):
