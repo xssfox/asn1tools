@@ -242,6 +242,35 @@ class UniversalString(StringType):
     ENCODING = 'utf-32-be'
     LENGTH_MULTIPLIER = 4
 
+class OffsetAndBitField():
+    """
+    From EPER: (Part Three FDT-Based System and Protocol Engineer) Efficient Packed Encoding Rules for ASN.1
+
+    Offset Field is required when the following is present:
+     - BitString type
+     - Sequence/Set which itself includes bit data of an optional or default component
+     - Choice type which includes bit data as a choice
+     - Sequence/Set includes bit data
+    This is because we can't determine how long the bit field will be  
+
+    Offset Field encoding:
+    - 0b0 - 1 to 7 bits required use the remaining bits for BIF (Bit Field)
+    - 0b10 - 0 bits or 1-63 OCETS then 6 remaining bits is the number of ocets reserved for BIF
+    - 0b11 - remaining 6 bits set number of ocets required for Offset field length, and the offset field defines the number  ocets of BIF
+
+    """
+    def __init__(self):
+        self.required = False
+    def addBitField(self):
+        raise NotImplemented
+    def __bytes__(self):
+        """
+        Return the offset field (if required) and Bit Field (BIF)
+        """
+
+
+        raise NotImplemented
+
 class Compiler(compiler.Compiler):
 
     def process_type(self, type_name, type_descriptor, module_name):

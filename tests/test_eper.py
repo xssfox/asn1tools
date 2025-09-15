@@ -16,7 +16,7 @@ from rrc_8_6_0 import EXPECTED as RRC_8_6_0
 from s1ap_14_4_0 import EXPECTED as S1AP_14_4_0
 from x691_a4 import EXPECTED as X691_A4
 from ulp import EXPECTED as OMA_ULP
-
+from asn1tools.codecs.eper import OffsetAndBitField
 
 class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
@@ -120,7 +120,34 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
         for type_name, decoded, encoded in datas:
             self.assert_encode_decode(foo, type_name, decoded, encoded)
 
-    # def test_need_off(self):
+    def test_offset_field_required(self):
+        a = OffsetAndBitField()
+        a.required = True
+        encoded = bytes(a)
+        
+        assert len(encoded) == 1
+    def test_offset_field_not_required(self):
+        a = OffsetAndBitField()
+        encoded = bytes(a)
+        
+        assert len(encoded) == 0
+    def test_offset_bitfield(self):
+        a = OffsetAndBitField()
+        a.addBitField()
+        encoded = bytes(a)
+        assert encoded & 0b0000_0001 == 0b0
+
+        for x in range(7): # add 7 more bits, to overflow the offset field
+            a.addBitField()
+        encoded = bytes(a)
+        assert encoded & 0b0000_0011 == 0b10
+
+        for x in range(64*8): # more than 64 ocets of bif
+            a.addBitField()
+        encoded = bytes(a)
+        assert encoded & 0b0000_0011 == 0b11
+    
+
         
     def test_encode_normal_integer():
         integer = eper.Integer("test_number")
