@@ -7,6 +7,7 @@ import asn1tools
 import sys
 from copy import deepcopy
 from asn1tools.codecs import eper
+from asn1tools.parser import parse_string
 
 sys.path.append('tests/files')
 sys.path.append('tests/files/3gpp')
@@ -149,7 +150,7 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
     
 
     def test_seq_optional_bit(self):
-        foo = asn1tools.compile_string(
+        foo = parse_string(
             """
             US5638066 DEFINITIONS ::= BEGIN
             Employees ::= SEQUENCE OF PersonalRecord
@@ -157,8 +158,10 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
                 a BOOLEAN OPTIONAL
             }
             END
-            """, "eper"
-        )
+            """)
+        b = eper.Compiler(foo,False)
+        b.process()
+        assert b.offset_field.off_required == True
 
         
     def test_encode_normal_integer():

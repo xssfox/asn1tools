@@ -32,7 +32,30 @@ from .permitted_alphabet import PRINTABLE_STRING
 from .permitted_alphabet import IA5_STRING
 from .permitted_alphabet import BMP_STRING
 from .permitted_alphabet import VISIBLE_STRING
-from .per import PermittedAlphabet, AdditionGroup, CompiledType
+from .per import PermittedAlphabet, AdditionGroup
+
+class CompiledType(compiler.CompiledType):
+
+    def encode(self, data):
+        encoder = Encoder()
+        try:
+            self._type.encode(data, encoder)
+        except ErrorWithLocation as e:
+            # Add member location
+            e.add_location(self._type)
+            raise e
+
+        return encoder.as_bytearray()
+
+    def decode(self, data):
+        decoder = Decoder(bytearray(data))
+        try:
+            return self._type.decode(decoder)
+        except ErrorWithLocation as e:
+            # Add member location
+            e.add_location(self._type)
+            raise e
+
 
 class Type(BaseType):
 
@@ -314,8 +337,9 @@ class Choice(Type):
 class Compiler(compiler.Compiler):
 
     # TODO THIS IS FROM PER AND NEEDS TO ADJUSTED
-
-    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.offset_field = OffsetAndBitField()
 
     def process_type(self, type_name, type_descriptor, module_name):
 
@@ -466,13 +490,12 @@ class Compiler(compiler.Compiler):
             compiled = self.set_compiled_restricted_to(compiled,
                                                        type_descriptor,
                                                        module_name)
-
-        compiled.offset_field = OffsetAndBitField()
         # check if we need BIF
-        if compiled is MembersType:
-            compiled.offset_field.checkOffRequired(type_name, compiled.root_members)
+        if issubclass(type(compiled), MembersType):
+            self.offset_field.checkOffRequired(type_name, compiled.root_members)
         else:
-            compiled.offset_field.checkOffRequired(type_name)
+            self.offset_field.checkOffRequired(type_name)
+
         return compiled
 
     def set_compiled_tag(self, compiled, type_descriptor):
@@ -492,6 +515,8 @@ class Compiler(compiler.Compiler):
         compiled_members = []
         in_extension = False
         additions = None
+
+
 
         for member in members:
             if member == EXTENSION_MARKER:
@@ -559,6 +584,232 @@ class Compiler(compiler.Compiler):
         decode_map = {i: ord(v) for i, v in enumerate(value)}
 
         return PermittedAlphabet(encode_map, decode_map)
+
+class Encoder(object):
+
+    def __init__(self):
+        self.number_of_bits = 0
+        self.value = 0
+        self.chunks_number_of_bits = 0
+        self.chunks = []
+
+    def __iadd__(self, other):
+        for value, number_of_bits in other.chunks:
+            self.append_non_negative_binary_integer(value, number_of_bits)
+
+        self.append_non_negative_binary_integer(other.value,
+                                                other.number_of_bits)
+
+        return self
+
+    def reset(self):
+        self.number_of_bits = 0
+        self.value = 0
+        self.chunks_number_of_bits = 0
+        self.chunks = []
+
+    def are_all_bits_zero(self):
+        return not (any([value for value, _ in self.chunks]) or self.value)
+
+    def number_of_bytes(self):
+        return (self.chunks_number_of_bits + self.number_of_bits + 7) // 8
+
+    def offset(self):
+        return (len(self.chunks), self.number_of_bits)
+
+    def set_bit(self, offset):
+        chunk_offset, bit_offset = offset
+
+        if len(self.chunks) == chunk_offset:
+            self.value |= (1 << (self.number_of_bits - bit_offset - 1))
+        else:
+            chunk = self.chunks[chunk_offset]
+            chunk[0] |= (1 << (chunk[1] - bit_offset - 1))
+
+    def align(self):
+        self.align_always()
+
+    def align_always(self):
+        width = 8 * self.number_of_bytes()
+        width -= self.chunks_number_of_bits
+        width -= self.number_of_bits
+        self.number_of_bits += width
+        self.value <<= width
+
+    def append_bit(self, bit):
+        """Append given bit.
+
+        """
+
+        self.number_of_bits += 1
+        self.value <<= 1
+        self.value |= bit
+
+    def append_bits(self, data, number_of_bits):
+        """Append given bits.
+
+        """
+
+        if number_of_bits == 0:
+            return
+
+        value = int(binascii.hexlify(data), 16)
+        value >>= (8 * len(data) - number_of_bits)
+
+        self.append_non_negative_binary_integer(value, number_of_bits)
+
+    def append_non_negative_binary_integer(self, value, number_of_bits):
+        """Append given integer value.
+
+        """
+
+        if self.number_of_bits > 4096:
+            self.chunks.append([self.value, self.number_of_bits])
+            self.chunks_number_of_bits += self.number_of_bits
+            self.number_of_bits = 0
+            self.value = 0
+
+        self.number_of_bits += number_of_bits
+        self.value <<= number_of_bits
+        self.value |= value
+
+    def append_bytes(self, data):
+        """Append given data.
+
+        """
+
+        self.append_bits(data, 8 * len(data))
+
+    def as_bytearray(self):
+        """Return the bits as a bytearray.
+
+        """
+
+        value = 0
+        number_of_bits = 0
+
+        for chunk_value, chunk_number_of_bits in self.chunks:
+            value <<= chunk_number_of_bits
+            value |= chunk_value
+            number_of_bits += chunk_number_of_bits
+
+        value <<= self.number_of_bits
+        value |= self.value
+        number_of_bits += self.number_of_bits
+
+        if number_of_bits == 0:
+            return bytearray()
+
+        number_of_alignment_bits = (8 - (number_of_bits % 8))
+
+        if number_of_alignment_bits != 8:
+            value <<= number_of_alignment_bits
+            number_of_bits += number_of_alignment_bits
+
+        value |= (0x80 << number_of_bits)
+        value = hex(value)[4:].rstrip('L')
+
+        return bytearray(binascii.unhexlify(value))
+
+    def append_length_determinant(self, length):
+        if length < 128:
+            encoded = bytearray([length])
+        elif length < 16384:
+            encoded = bytearray([(0x80 | (length >> 8)), (length & 0xff)])
+        elif length < 32768:
+            encoded = b'\xc1'
+            length = 16384
+        elif length < 49152:
+            encoded = b'\xc2'
+            length = 32768
+        elif length < 65536:
+            encoded = b'\xc3'
+            length = 49152
+        else:
+            encoded = b'\xc4'
+            length = 65536
+
+        self.append_bytes(encoded)
+
+        return length
+
+    def append_length_determinant_chunks(self, length):
+        offset = 0
+        chunk_length = length
+
+        while True:
+            chunk_length = self.append_length_determinant(chunk_length)
+
+            yield offset, chunk_length
+
+            if chunk_length < 16384:
+                break
+
+            offset += chunk_length
+            chunk_length = length - offset
+
+    def append_normally_small_non_negative_whole_number(self, value):
+        if value < 64:
+            self.append_non_negative_binary_integer(value, 7)
+        else:
+            self.append_bit(1)
+            length = (value.bit_length() + 7) // 8
+            self.append_length_determinant(length)
+            self.append_non_negative_binary_integer(value, 8 * length)
+
+    def append_normally_small_length(self, value):
+        if value <= 64:
+            self.append_non_negative_binary_integer(value - 1, 7)
+        elif value <= 127:
+            self.append_non_negative_binary_integer(0x100 | value, 9)
+        else:
+            raise NotImplementedError(
+                'Normally small length number >127 is not yet supported.')
+
+    def append_constrained_whole_number(self,
+                                        value,
+                                        minimum,
+                                        maximum,
+                                        number_of_bits):
+        _range = (maximum - minimum + 1)
+        value -= minimum
+
+        if _range <= 255:
+            self.append_non_negative_binary_integer(value, number_of_bits)
+        elif _range == 256:
+            self.align_always()
+            self.append_non_negative_binary_integer(value, 8)
+        elif _range <= 65536:
+            self.align_always()
+            self.append_non_negative_binary_integer(value, 16)
+        else:
+            self.align_always()
+            self.append_non_negative_binary_integer(value, number_of_bits)
+
+    def append_unconstrained_whole_number(self, value):
+        number_of_bits = value.bit_length()
+
+        if value < 0:
+            number_of_bytes = ((number_of_bits + 7) // 8)
+            value = ((1 << (8 * number_of_bytes)) + value)
+
+            if (value & (1 << (8 * number_of_bytes - 1))) == 0:
+                value |= (0xff << (8 * number_of_bytes))
+                number_of_bytes += 1
+        elif value > 0:
+            number_of_bytes = ((number_of_bits + 7) // 8)
+
+            if number_of_bits == (8 * number_of_bytes):
+                number_of_bytes += 1
+        else:
+            number_of_bytes = 1
+
+        self.append_length_determinant(number_of_bytes)
+        self.append_non_negative_binary_integer(value,
+                                                8 * number_of_bytes)
+
+    def __repr__(self):
+        return format_bytes(self.as_bytearray())
 
 
 def compile_dict(specification, numeric_enums=False):
