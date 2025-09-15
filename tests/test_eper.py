@@ -6,6 +6,7 @@ from .utils import Asn1ToolsBaseTest
 import asn1tools
 import sys
 from copy import deepcopy
+import .codec.eper
 
 sys.path.append('tests/files')
 sys.path.append('tests/files/3gpp')
@@ -121,6 +122,16 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
     # def test_need_off(self):
         
+    def test_encode_normal_integer():
+        integer = eper.Integer("test_number")
+        data = b"\x41\x00"
+        # EPER encoding of integer 64
+        # 1st octet: 01 000001 -- in hex: 41
+        # 2nd octet: 00 000000 -- in hex: 00
+        encoder = eper.Encoder()
+        foo = integer.encode(data, encoder)
+        00 011110
+
 
 if __name__ == '__main__':
     unittest.main()
