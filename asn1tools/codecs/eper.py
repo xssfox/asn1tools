@@ -3,7 +3,7 @@
 """
 
 from . import DecodeError, ErrorWithLocation
-from . import per
+from . import per, uper
 from . import restricted_utc_time_to_datetime
 from . import restricted_utc_time_from_datetime
 from . import restricted_generalized_time_to_datetime
@@ -15,7 +15,6 @@ from .per import PermittedAlphabet
 from .per import Type
 from .per import Real
 from .per import Null
-from .per import Enumerated
 from .per import ObjectIdentifier
 from .per import Sequence
 from .per import Set
@@ -38,10 +37,13 @@ class Encoder(per.Encoder):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.bitfield = [] # TODO probably change from a list to bits at some point
+        self.bitFieldEncoder = uper.Encoder()
         
-    def append_bitfield(self,data):
-        self.bitfield.append(data)
+    # TODO RULES AROUND BITFIELD LENGTH
+
+    @property
+    def bitfield(self):
+        return self.bitFieldEncoder.as_bytearray()
 
     def align(self):
         pass
@@ -316,19 +318,45 @@ class OffsetFieldMixin:
         raise NotImplemented
     
 
-class BitFieldMixin:
-    """
-    Supplies the data for Byte Filed (BIF) if required
-    """
-    def encode(self,data,encoder):
-        super(BitFieldMixin, self).encode( data, encoder)
-        encoder.append_bitfield(bool(data))
+# class BitFieldMixin:
+#     """
+#     Supplies the data for Byte Filed (BIF) if required
+#     """
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
 
+#     def encode(self,data,encoder):
+#         super(BitFieldMixin, self).encode( data, encoder)
+#         encoder.append_bitfield(
+#             self.encodeBitField(data),encoder.bitFieldEncoder)
+
+#     def decode(self,decoder):
+#         raise NotImplementedError
+    
+#     def encodeBitField(self, data):
+#         raise NotImplementedError
+    
+
+class Enumerated(per.Enumerated):
+    def encode(self,data, encoder):  # TODO need tests for n=1, n=2, n=128, n=129
+        if self.root_number_of_bits == 0:
+            pass # If an enum in a forrest with only one possible value does it get heard? (aka, there's no point encoding since both sides will know what the intended value should be)
+        elif self.root_number_of_bits >= 1 and self.root_number_of_bits <= 7:
+            super(Enumerated, self).encode(data, encoder.bitFieldEncoder)
+        elif self.root_number_of_bits > 7:
+            raise NotImplementedError
+        else:
+            raise ValueError()
+        #raise NotImplementedError TODO
+    # def encode(self,data,encoder):
+    #     raise NotImplementedError
+
+class Boolean( per.Boolean):
+    def encode(self, data, encoder):
+        breakpoint()
+        super(Boolean, self).encode(data, encoder.bitFieldEncoder)
     def decode(self,decoder):
-        raise NotImplemented
-
-class Boolean(BitFieldMixin, per.Boolean):
-    pass
+        raise NotImplementedError
     
 
 class SequenceOf(ArrayType):
@@ -516,6 +544,7 @@ class CompiledType(per.CompiledType):
             # Add member location
             e.add_location(self._type)
             raise e
+        breakpoint()
         return encoder.as_bytearray()
 
     def decode(self, data):
