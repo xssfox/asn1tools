@@ -568,7 +568,6 @@ class CompiledType(per.CompiledType):
             # Add member location
             e.add_location(self._type)
             raise e
-        breakpoint()
         return encoder.as_bytearray()
 
     def decode(self, data):

@@ -121,6 +121,61 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
         for type_name, decoded, encoded in datas:
             self.assert_encode_decode(foo, type_name, decoded, encoded)
 
+    def test_p3_fdt_systems(self):
+            # These tests are from the Part Three FDT-Based System and Protocol Engineering document examples
+            foo = asn1tools.compile_string(
+                """
+                FDT DEFINITIONS ::= BEGIN
+                C ::= SEQUENCE {
+                    a INTEGER,
+                    b IA5String OPTIONAL,
+                    c BOOLEAN,
+                    d INTEGER OPTIONAL
+                }
+
+                D ::= SEQUENCE {
+                    a INTEGER (0..7),
+                    b IA5String (SIZE (1..4)) OPTIONAL,
+                    c BOOLEAN,
+                    d INTEGER (16) OPTIONAL
+                }
+                END
+                """, "eper"
+            )
+
+            example = {
+                "a": 2,
+                "b": "A",
+                "c": True,
+                "d": 16
+            }
+
+            c_result = bytes( # TODO THESE MIGHT BE THE WRONG BIT ORDER
+                [
+                    0b1110_0000,
+                    0b0000_0010,
+                    0b0000_0001,
+                    0b0100_0001,
+                    0b0001_0000
+                ]
+            )
+
+            d_result = bytes(
+                [
+                    0b1101_0001,
+                    0b0100_0001
+                ]
+            )
+
+
+            datas = [
+                ('C', example, c_result),
+                ('D', example, d_result)
+            ]
+
+            for type_name, decoded, encoded in datas:
+                self.assert_encode_decode(foo, type_name, decoded, encoded)
+
     # def test_offset_field_required(self):
     #     a = OffsetAndBitField()
     #     a.off_required = True
