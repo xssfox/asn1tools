@@ -2,166 +2,332 @@
 
 """
 
-from operator import attrgetter
-from operator import itemgetter
-import binascii
-import string
-import datetime
-
-from ..parser import EXTENSION_MARKER
-from . import BaseType, format_bytes, ErrorWithLocation
-from . import EncodeError
-from . import DecodeError
-from . import OutOfDataError
-from . import compiler
-from . import format_or
+from . import DecodeError, ErrorWithLocation
+from . import per
 from . import restricted_utc_time_to_datetime
 from . import restricted_utc_time_from_datetime
 from . import restricted_generalized_time_to_datetime
 from . import restricted_generalized_time_from_datetime
-from .compiler import enum_values_split
-from .compiler import enum_values_as_dict
-from .compiler import clean_bit_string_value
-from .compiler import rstrip_bit_string_zeros
-from .ber import encode_real
-from .ber import decode_real
-from .ber import encode_object_identifier
-from .ber import decode_object_identifier
+from .per import to_int
+from .per import to_byte_array
+from .per import integer_as_number_of_bits
+from .per import PermittedAlphabet
+from .per import Type
+from .per import Real
+from .per import Null
+from .per import Enumerated
+from .per import ObjectIdentifier
+from .per import Sequence
+from .per import Set
+from .per import UTF8String
+from .per import GeneralString
+from .per import GraphicString
+from .per import TeletexString
+from .per import UniversalString
+from .per import ObjectDescriptor
+from .per import Any
+from .per import Recursive
 from .permitted_alphabet import NUMERIC_STRING
 from .permitted_alphabet import PRINTABLE_STRING
 from .permitted_alphabet import IA5_STRING
 from .permitted_alphabet import BMP_STRING
 from .permitted_alphabet import VISIBLE_STRING
-from .per import PermittedAlphabet, AdditionGroup
-
-class CompiledType(compiler.CompiledType):
-
-    def encode(self, data):
-        encoder = Encoder()
-        try:
-            self._type.encode(data, encoder)
-        except ErrorWithLocation as e:
-            # Add member location
-            e.add_location(self._type)
-            raise e
-
-        return encoder.as_bytearray()
-
-    def decode(self, data):
-        decoder = Decoder(bytearray(data))
-        try:
-            return self._type.decode(decoder)
-        except ErrorWithLocation as e:
-            # Add member location
-            e.add_location(self._type)
-            raise e
 
 
-class Type(BaseType):
+class Encoder(per.Encoder):
 
-    def __init__(self, name, type_name):
-        super().__init__(name, type_name)
-        self.module_name = None
-        self.tag = None
-        self.isBitField = False
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.bif = [] # TODO probably change from a list to bits at some point
+        
+    def append_bif(self,data):
+        self.bif.append(data)
 
-    def set_size_range(self, minimum, maximum, has_extension_marker):
+    def align(self):
         pass
 
-    def set_restricted_to_range(self, minimum, maximum, has_extension_marker):
+
+class Decoder(per.Decoder):
+
+    def align(self):
         pass
 
-class KnownMultiplierStringType(Type):
+
+class KnownMultiplierStringType(per.KnownMultiplierStringType):
 
     ENCODING = 'ascii'
+    PERMITTED_ALPHABET = ''
 
     def __init__(self,
                  name,
                  minimum=None,
                  maximum=None,
-                 has_extension_marker=False,
+                 has_extension_marker=None,
                  permitted_alphabet=None):
         super(KnownMultiplierStringType, self).__init__(name,
                                                         self.__class__.__name__)
+        self.set_size_range(minimum, maximum, has_extension_marker)
 
-class Decoder(object):
+        if permitted_alphabet is None:
+            permitted_alphabet = self.PERMITTED_ALPHABET
 
-    def __init__(self, encoded):
-        raise NotImplemented
+        self.permitted_alphabet = permitted_alphabet
+        self.bits_per_character = integer_as_number_of_bits(
+            len(permitted_alphabet) - 1)
 
-class MembersType(Type):
-     # TODO THIS IS FROM PER AND NEEDS TO ADJUSTED
+    def encode(self, data, encoder):
+        if self.has_extension_marker:
+            encoder.append_bit(0)
 
-    def __init__(self,
-                 name,
-                 root_members,
-                 additions,
-                 type_name):
-        super(MembersType, self).__init__(name, type_name)
-        self.root_members = root_members
-        self.additions = additions
-        self.optionals = [
-            member
-            for member in root_members
-            if member.optional or member.default is not None
-        ]
+        if self.number_of_bits is None:
+            return self.encode_unbound(data, encoder)
+        elif self.minimum != self.maximum:
+            encoder.append_non_negative_binary_integer(len(data) - self.minimum,
+                                                       self.number_of_bits)
+
+        for value in data:
+            encoder.append_non_negative_binary_integer(
+                self.permitted_alphabet.encode(
+                    to_int(value.encode(self.ENCODING))),
+                self.bits_per_character)
+
+    def decode(self, decoder):
+        if self.has_extension_marker:
+            bit = decoder.read_bit()
+
+            if bit:
+                raise NotImplementedError(
+                    'String size extension is not yet implemented.')
+
+        if self.number_of_bits is None:
+            return self.decode_unbound(decoder)
+        else:
+            length = self.minimum
+
+            if self.minimum != self.maximum:
+                length += decoder.read_non_negative_binary_integer(self.number_of_bits)
+
+        data = bytearray()
+
+        for _ in range(length):
+            value = decoder.read_non_negative_binary_integer(self.bits_per_character)
+            value = self.permitted_alphabet.decode(value)
+            data += to_byte_array(value, self.bits_per_character)
+
+        return data.decode(self.ENCODING)
 
 
-class ArrayType(Type):
+class ArrayType(per.ArrayType):
 
-    def __init__(self,
-                 name,
-                 element_type,
-                 minimum,
-                 maximum,
-                 has_extension_marker,
-                 type_name):
-        super(ArrayType, self).__init__(name, type_name)
-class Boolean(Type):
+    def encode(self, data, encoder):
+        if self.has_extension_marker:
+            if self.minimum <= len(data) <= self.maximum:
+                encoder.append_bit(0)
+            else:
+                encoder.append_bit(1)
+                encoder.append_length_determinant(len(data))
 
-    def __init__(self, name):
-        super(Boolean, self).__init__(name, 'BOOLEAN')
+                for entry in data:
+                    self.element_type.encode(entry, encoder)
+
+                return
+
+        if self.number_of_bits is None:
+            return self.encode_unbound(data, encoder)
+        elif self.minimum != self.maximum:
+            encoder.append_non_negative_binary_integer(len(data) - self.minimum,
+                                                       self.number_of_bits)
+
+        for entry in data:
+            self.element_type.encode(entry, encoder)
+
+    def decode(self, decoder):
+        length = None
+
+        if self.has_extension_marker:
+            bit = decoder.read_bit()
+
+            if bit:
+                length = decoder.read_length_determinant()
+
+        if length is not None:
+            pass
+        elif self.number_of_bits is None:
+            return self.decode_unbound(decoder)
+        else:
+            length = self.minimum
+
+            if self.minimum != self.maximum:
+                length += decoder.read_non_negative_binary_integer(
+                    self.number_of_bits)
+
+        decoded = []
+
+        for _ in range(length):
+            decoded_element = self.element_type.decode(decoder)
+            decoded.append(decoded_element)
+
+        return decoded
+
 
 class Integer(Type):
 
     def __init__(self, name):
         super(Integer, self).__init__(name, 'INTEGER')
+        self.minimum = None
+        self.maximum = None
+        self.has_extension_marker = None
+        self.number_of_bits = None
+
+    def set_restricted_to_range(self, minimum, maximum, has_extension_marker):
+        self.has_extension_marker = has_extension_marker
+
+        if minimum == 'MIN' or maximum == 'MAX':
+            return
+
+        self.minimum = minimum
+        self.maximum = maximum
+        size = self.maximum - self.minimum
+        self.number_of_bits = integer_as_number_of_bits(size)
+
+    def encode(self, data, encoder):
+        if self.has_extension_marker:
+            if self.minimum <= data <= self.maximum:
+                encoder.append_bit(0)
+            else:
+                encoder.append_bit(1)
+                encoder.append_unconstrained_whole_number(data)
+                return
+
+        if self.number_of_bits is None:
+            encoder.append_unconstrained_whole_number(data)
+        else:
+            encoder.append_non_negative_binary_integer(data - self.minimum,
+                                                       self.number_of_bits)
+
+    def decode(self, decoder):
+        if self.has_extension_marker:
+            if decoder.read_bit():
+                return decoder.read_unconstrained_whole_number()
+
+        if self.number_of_bits is None:
+            return decoder.read_unconstrained_whole_number()
+        else:
+            value = decoder.read_non_negative_binary_integer(self.number_of_bits)
+
+            return value + self.minimum
+
+    def __repr__(self):
+        return 'Integer({})'.format(self.name)
+
+
+class BitString(per.BitString):
+
+    def encode(self, data, encoder):
+        data, number_of_bits = data
+
+        if self.has_extension_marker:
+            if self.minimum <= number_of_bits <= self.maximum:
+                encoder.append_bit(0)
+            else:
+                raise NotImplementedError(
+                    'BIT STRING extension is not yet implemented.')
+
+        if self.has_named_bits:
+            data, number_of_bits = self.rstrip_zeros(data, number_of_bits)
+
+        if self.number_of_bits is None:
+            return self.encode_unbound(data, number_of_bits, encoder)
+        elif self.minimum != self.maximum:
+            encoder.append_non_negative_binary_integer(
+                number_of_bits - self.minimum,
+                self.number_of_bits)
+
+        encoder.append_bits(data, number_of_bits)
+
+    def decode(self, decoder):
+        if self.has_extension_marker:
+            if decoder.read_bit():
+                raise NotImplementedError(
+                    'BIT STRING extension is not yet implemented.')
+
+        if self.number_of_bits is None:
+            return self.decode_unbound(decoder)
+        else:
+            number_of_bits = self.minimum
+
+            if self.minimum != self.maximum:
+                number_of_bits += decoder.read_non_negative_binary_integer(
+                    self.number_of_bits)
+
+        value = decoder.read_bits(number_of_bits)
+
+        return (value, number_of_bits)
+
+
+class OctetString(per.OctetString):
+
+    def encode(self, data, encoder):
+        if self.has_extension_marker:
+            if self.minimum <= len(data) <= self.maximum:
+                encoder.append_bit(0)
+            else:
+                encoder.append_bit(1)
+                encoder.align()
+                encoder.append_length_determinant(len(data))
+                encoder.append_bytes(data)
+
+                return
+
+        if self.number_of_bits is None:
+            return self.encode_unbound(data, encoder)
+        elif self.minimum != self.maximum:
+            encoder.append_non_negative_binary_integer(len(data) - self.minimum,
+                                                       self.number_of_bits)
+
+        encoder.append_bytes(data)
+
+    def decode(self, decoder):
+        if self.has_extension_marker:
+            bit = decoder.read_bit()
+
+            if bit:
+                length = decoder.read_length_determinant()
+
+                return decoder.read_bytes(length)
+
+        if self.number_of_bits is None:
+            return self.decode_unbound(decoder)
+        else:
+            length = self.minimum
+
+            if self.minimum != self.maximum:
+                length += decoder.read_non_negative_binary_integer(
+                    self.number_of_bits)
+
+        return decoder.read_bytes(length)
+
+class OffsetFieldMixin:
+    """
+    Used to determine if this field requires adjusting the Offset Field value
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        raise NotImplemented
+class BitFieldMixin:
+    """
+    Supplies the data for Byte Filed (BIF) if required
+    """
+    def encode(self,data,encoder):
+        super(BitFieldMixin, self).encode( data, encoder)
+        encoder.append_bif(bool(data))
+
+    def decode(self,decoder):
+        raise NotImplemented
+
+class Boolean(BitFieldMixin, per.Boolean):
+    pass
     
-class Null(Type):
-
-    def __init__(self, name):
-        super(Null, self).__init__(name, 'NULL')
-
-class BitString(Type):
-
-    def __init__(self,
-                 name,
-                 named_bits,
-                 minimum,
-                 maximum,
-                 has_extension_marker):
-        super(BitString, self).__init__(name, 'BIT STRING')
-
-class OctetString(Type):
-
-    def __init__(self, name, minimum, maximum, has_extension_marker):
-        super(OctetString, self).__init__(name, 'OCTET STRING')
-    
-class Enumerated(Type):
-
-    def __init__(self, name, values, numeric):
-        super(Enumerated, self).__init__(name, 'ENUMERATED')
-    
-class Sequence(MembersType):
-
-    def __init__(self,
-                 name,
-                 root_members,
-                 additions):
-        super(Sequence, self).__init__(name,
-                                       root_members,
-                                       additions,
-                                       'SEQUENCE')
 
 class SequenceOf(ArrayType):
 
@@ -178,17 +344,7 @@ class SequenceOf(ArrayType):
                                          has_extension_marker,
                                          'SEQUENCE OF')
 
-class Set(MembersType):
 
-    def __init__(self,
-                 name,
-                 root_members,
-                 additions):
-        super(Set, self).__init__(name,
-                                  root_members,
-                                  additions,
-                                  'SET')
-    
 class SetOf(ArrayType):
 
     def __init__(self,
@@ -203,13 +359,17 @@ class SetOf(ArrayType):
                                     maximum,
                                     has_extension_marker,
                                     'SET OF')
-    
 
-class UTF8String(Type):
 
-    def __init__(self, name):
-        super(UTF8String, self).__init__(name, 'UTF8String')
-    
+class Choice(per.Choice):
+
+    def encode_root_index(self, index, encoder):
+        encoder.append_non_negative_binary_integer(index, self.root_number_of_bits)
+
+    def decode_root_index(self, decoder):
+        return decoder.read_non_negative_binary_integer(self.root_number_of_bits)
+
+
 class NumericString(KnownMultiplierStringType):
 
     ALPHABET = bytearray(NUMERIC_STRING.encode('ascii'))
@@ -217,7 +377,8 @@ class NumericString(KnownMultiplierStringType):
     DECODE_MAP = {i: v for i, v in enumerate(ALPHABET)}
     PERMITTED_ALPHABET = PermittedAlphabet(ENCODE_MAP,
                                            DECODE_MAP)
-    
+
+
 class PrintableString(KnownMultiplierStringType):
 
     ALPHABET = bytearray(PRINTABLE_STRING.encode('ascii'))
@@ -225,7 +386,7 @@ class PrintableString(KnownMultiplierStringType):
     DECODE_MAP = {v: v for v in ALPHABET}
     PERMITTED_ALPHABET = PermittedAlphabet(ENCODE_MAP,
                                            DECODE_MAP)
-    
+
 
 class IA5String(KnownMultiplierStringType):
 
@@ -252,97 +413,122 @@ class VisibleString(KnownMultiplierStringType):
                                            ENCODE_DECODE_MAP)
 
 
-class StringType(Type):
+class UTCTime(VisibleString):
+
+    def encode(self, data, encoder):
+        encoded = restricted_utc_time_from_datetime(data)
+
+        return super(UTCTime, self).encode(encoded, encoder)
+
+    def decode(self, decoder):
+        decoded = super(UTCTime, self).decode(decoder)
+
+        return restricted_utc_time_to_datetime(decoded)
+
+
+class GeneralizedTime(VisibleString):
+
+    def encode(self, data, encoder):
+        enceded = restricted_generalized_time_from_datetime(data)
+
+        return super(GeneralizedTime, self).encode(enceded, encoder)
+
+    def decode(self, decoder):
+        decoded = super(GeneralizedTime, self).decode(decoder)
+
+        return restricted_generalized_time_to_datetime(decoded)
+
+
+class Date(per.Date):
+
     def __init__(self, name):
-        raise NotImplemented
-class GeneralString(StringType):
-
-    ENCODING = 'latin-1'
-
-
-class GraphicString(StringType):
-
-    ENCODING = 'latin-1'
-
-
-class TeletexString(StringType):
-
-    ENCODING = 'iso-8859-1'
-
-
-class UniversalString(StringType):
-
-    ENCODING = 'utf-32-be'
-    LENGTH_MULTIPLIER = 4
-
-class OffsetAndBitField():
-    """
-    From EPER: (Part Three FDT-Based System and Protocol Engineer) Efficient Packed Encoding Rules for ASN.1
-
-    Offset Field is required when the following is present:
-     - BitString type
-     - Sequence/Set which itself includes bit data of an optional or default component
-     - Choice type which includes bit data as a choice
-     - Sequence/Set includes bit data
-    This is because we can't determine how long the bit field will be  
-
-    Offset Field encoding:
-    - 0b0 - 1 to 7 bits required use the remaining bits for BIF (Bit Field)
-    - 0b10 - 0 bits or 1-63 OCETS then 6 remaining bits is the number of ocets reserved for BIF
-    - 0b11 - remaining 6 bits set number of ocets required for Offset field length, and the offset field defines the number  ocets of BIF
-
-    """
-    def __init__(self):
-        self.off_required = False
-        self.__bitCount = 0
-        self.__bits = []
-
-    def checkOffRequired(self, type_name: str, members=None):
-        if type_name in [
-            'BIT STRING',
-        ]:
-            self.off_required = True
-        if (members and [(x.optional or x.has_default) and x.isBitField for x in members]):
-            self.off_required = True
-    def addBitField(self, bit: bool):
-        self.__bits.append(bit)
-    def __bytes__(self):
-        """
-        Return the offset field (if required) and Bit Field (BIF)
-        """
-        if self.off_required:
-            if (    len(self.__bits) == 0 or
-                    (len(self.__bits) > 6 and 
-                     len(self.__bits) > 8*63
-                     )
-                ):
-                output = bytes([0b10])
-            elif len(self.__bits) < 7:
-                output = bytes([0b0])
-            else:
-                output = bytes([0b11])
-        else:
-            output = b''
-
-        print("NOT REALLY IMPLEMENTED")
-
-        return output
-
-class Choice(Type):
-
-    def __init__(self, name, root_members, additions):
-        super(Choice, self).__init__(name, 'CHOICE')
+        super(Date, self).__init__(name)
+        immediate = Integer('immediate')
+        near_future = Integer('near_future')
+        near_past = Integer('near_past')
+        reminder = Integer('reminder')
+        immediate.set_restricted_to_range(2005, 2020, False)
+        near_future.set_restricted_to_range(2021, 2276, False)
+        near_past.set_restricted_to_range(1749, 2004, False)
+        reminder.set_restricted_to_range('MIN', 1748, False)
+        year = Choice('year',
+                      [immediate, near_future, near_past, reminder],
+                      None)
+        month = Integer('month')
+        day = Integer('day')
+        month.set_restricted_to_range(1, 12, False)
+        day.set_restricted_to_range(1, 31, False)
+        self._inner = Sequence('DATE-ENCODING',
+                               [year, month, day],
+                               None)
 
 
-class Compiler(compiler.Compiler):
+class TimeOfDay(per.TimeOfDay):
 
-    # TODO THIS IS FROM PER AND NEEDS TO ADJUSTED
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.offset_field = OffsetAndBitField()
+    def __init__(self, name):
+        super(TimeOfDay, self).__init__(name)
+        hours = Integer('hours')
+        minutes = Integer('minutes')
+        seconds = Integer('seconds')
+        hours.set_restricted_to_range(0, 24, False)
+        minutes.set_restricted_to_range(0, 59, False)
+        seconds.set_restricted_to_range(0, 60, False)
+        self._inner = Sequence('TIME-OF-DAY-ENCODING',
+                               [hours, minutes, seconds],
+                               None)
+
+
+class DateTime(per.DateTime):
+
+    def __init__(self, name):
+        super(DateTime, self).__init__(name)
+        self._inner = Sequence('DATE-TIME-ENCODING',
+                               [Date('date'), TimeOfDay('time')],
+                               None)
+
+
+class OpenType(Type):
+
+    def __init__(self, name):
+        super(OpenType, self).__init__(name, 'OpenType')
+
+    def encode(self, data, encoder):
+        encoder.align()
+        encoder.append_length_determinant(len(data))
+        encoder.append_bytes(data)
+
+    def decode(self, decoder):
+        decoder.align()
+        length = decoder.read_length_determinant()
+
+        return decoder.read_bytes(length)
+
+
+class CompiledType(per.CompiledType):
+
+    def encode(self, data):
+        encoder = Encoder()
+        try:
+            self._type.encode(data, encoder)
+        except ErrorWithLocation as e:
+            # Add member location
+            e.add_location(self._type)
+            raise e
+        return encoder.as_bytearray()
+
+    def decode(self, data):
+        decoder = Decoder(bytearray(data))
+        try:
+            return self._type.decode(decoder)
+        except ErrorWithLocation as e:
+            # Add member location
+            e.add_location(self._type)
+            raise e
+
+
+class Compiler(per.Compiler):
 
     def process_type(self, type_name, type_descriptor, module_name):
-
         compiled_type = self.compile_type(type_name,
                                           type_descriptor,
                                           module_name)
@@ -490,326 +676,8 @@ class Compiler(compiler.Compiler):
             compiled = self.set_compiled_restricted_to(compiled,
                                                        type_descriptor,
                                                        module_name)
-        # check if we need BIF
-        if issubclass(type(compiled), MembersType):
-            self.offset_field.checkOffRequired(type_name, compiled.root_members)
-        else:
-            self.offset_field.checkOffRequired(type_name)
 
         return compiled
-
-    def set_compiled_tag(self, compiled, type_descriptor):
-        compiled = self.copy(compiled)
-        tag = type_descriptor['tag']
-        class_prio = CLASS_PRIO[tag.get('class', 'CONTEXT_SPECIFIC')]
-        class_number = tag['number']
-        compiled.tag = (class_prio, class_number)
-
-        return compiled
-
-    def compile_members(self,
-                        members,
-                        module_name,
-                        sort_by_tag=False,
-                        flat_additions=False):
-        compiled_members = []
-        in_extension = False
-        additions = None
-
-
-
-        for member in members:
-            if member == EXTENSION_MARKER:
-                in_extension = not in_extension
-
-                if in_extension:
-                    additions = []
-            elif in_extension:
-                self.compile_extension_member(member,
-                                              module_name,
-                                              additions,
-                                              flat_additions)
-            else:
-                self.compile_root_member(member,
-                                         module_name,
-                                         compiled_members)
-
-        if sort_by_tag:
-            compiled_members = sorted(compiled_members, key=attrgetter('tag'))
-
-        return compiled_members, additions
-
-    def compile_extension_member(self,
-                                 member,
-                                 module_name,
-                                 additions,
-                                 flat_additions):
-        if isinstance(member, list):
-            if flat_additions:
-                for memb in member:
-                    compiled_member = self.compile_member(memb,
-                                                          module_name)
-                    additions.append(compiled_member)
-            else:
-                compiled_member, _ = self.compile_members(member,
-                                                          module_name)
-                compiled_group = AdditionGroup('ExtensionAddition',
-                                               compiled_member,
-                                               None)
-                additions.append(compiled_group)
-        else:
-            compiled_member = self.compile_member(member,
-                                                  module_name)
-            additions.append(compiled_member)
-
-    def get_permitted_alphabet(self, type_descriptor):
-        def char_range(begin, end):
-            return ''.join([chr(char)
-                            for char in range(ord(begin), ord(end) + 1)])
-
-        if 'from' not in type_descriptor:
-            return
-
-        permitted_alphabet = type_descriptor['from']
-        value = ''
-
-        for item in permitted_alphabet:
-            if isinstance(item, tuple):
-                value += char_range(item[0], item[1])
-            else:
-                value += item
-
-        value = sorted(value)
-        encode_map = {ord(v): i for i, v in enumerate(value)}
-        decode_map = {i: ord(v) for i, v in enumerate(value)}
-
-        return PermittedAlphabet(encode_map, decode_map)
-
-class Encoder(object):
-
-    def __init__(self):
-        self.number_of_bits = 0
-        self.value = 0
-        self.chunks_number_of_bits = 0
-        self.chunks = []
-
-    def __iadd__(self, other):
-        for value, number_of_bits in other.chunks:
-            self.append_non_negative_binary_integer(value, number_of_bits)
-
-        self.append_non_negative_binary_integer(other.value,
-                                                other.number_of_bits)
-
-        return self
-
-    def reset(self):
-        self.number_of_bits = 0
-        self.value = 0
-        self.chunks_number_of_bits = 0
-        self.chunks = []
-
-    def are_all_bits_zero(self):
-        return not (any([value for value, _ in self.chunks]) or self.value)
-
-    def number_of_bytes(self):
-        return (self.chunks_number_of_bits + self.number_of_bits + 7) // 8
-
-    def offset(self):
-        return (len(self.chunks), self.number_of_bits)
-
-    def set_bit(self, offset):
-        chunk_offset, bit_offset = offset
-
-        if len(self.chunks) == chunk_offset:
-            self.value |= (1 << (self.number_of_bits - bit_offset - 1))
-        else:
-            chunk = self.chunks[chunk_offset]
-            chunk[0] |= (1 << (chunk[1] - bit_offset - 1))
-
-    def align(self):
-        self.align_always()
-
-    def align_always(self):
-        width = 8 * self.number_of_bytes()
-        width -= self.chunks_number_of_bits
-        width -= self.number_of_bits
-        self.number_of_bits += width
-        self.value <<= width
-
-    def append_bit(self, bit):
-        """Append given bit.
-
-        """
-
-        self.number_of_bits += 1
-        self.value <<= 1
-        self.value |= bit
-
-    def append_bits(self, data, number_of_bits):
-        """Append given bits.
-
-        """
-
-        if number_of_bits == 0:
-            return
-
-        value = int(binascii.hexlify(data), 16)
-        value >>= (8 * len(data) - number_of_bits)
-
-        self.append_non_negative_binary_integer(value, number_of_bits)
-
-    def append_non_negative_binary_integer(self, value, number_of_bits):
-        """Append given integer value.
-
-        """
-
-        if self.number_of_bits > 4096:
-            self.chunks.append([self.value, self.number_of_bits])
-            self.chunks_number_of_bits += self.number_of_bits
-            self.number_of_bits = 0
-            self.value = 0
-
-        self.number_of_bits += number_of_bits
-        self.value <<= number_of_bits
-        self.value |= value
-
-    def append_bytes(self, data):
-        """Append given data.
-
-        """
-
-        self.append_bits(data, 8 * len(data))
-
-    def as_bytearray(self):
-        """Return the bits as a bytearray.
-
-        """
-
-        value = 0
-        number_of_bits = 0
-
-        for chunk_value, chunk_number_of_bits in self.chunks:
-            value <<= chunk_number_of_bits
-            value |= chunk_value
-            number_of_bits += chunk_number_of_bits
-
-        value <<= self.number_of_bits
-        value |= self.value
-        number_of_bits += self.number_of_bits
-
-        if number_of_bits == 0:
-            return bytearray()
-
-        number_of_alignment_bits = (8 - (number_of_bits % 8))
-
-        if number_of_alignment_bits != 8:
-            value <<= number_of_alignment_bits
-            number_of_bits += number_of_alignment_bits
-
-        value |= (0x80 << number_of_bits)
-        value = hex(value)[4:].rstrip('L')
-
-        return bytearray(binascii.unhexlify(value))
-
-    def append_length_determinant(self, length):
-        if length < 128:
-            encoded = bytearray([length])
-        elif length < 16384:
-            encoded = bytearray([(0x80 | (length >> 8)), (length & 0xff)])
-        elif length < 32768:
-            encoded = b'\xc1'
-            length = 16384
-        elif length < 49152:
-            encoded = b'\xc2'
-            length = 32768
-        elif length < 65536:
-            encoded = b'\xc3'
-            length = 49152
-        else:
-            encoded = b'\xc4'
-            length = 65536
-
-        self.append_bytes(encoded)
-
-        return length
-
-    def append_length_determinant_chunks(self, length):
-        offset = 0
-        chunk_length = length
-
-        while True:
-            chunk_length = self.append_length_determinant(chunk_length)
-
-            yield offset, chunk_length
-
-            if chunk_length < 16384:
-                break
-
-            offset += chunk_length
-            chunk_length = length - offset
-
-    def append_normally_small_non_negative_whole_number(self, value):
-        if value < 64:
-            self.append_non_negative_binary_integer(value, 7)
-        else:
-            self.append_bit(1)
-            length = (value.bit_length() + 7) // 8
-            self.append_length_determinant(length)
-            self.append_non_negative_binary_integer(value, 8 * length)
-
-    def append_normally_small_length(self, value):
-        if value <= 64:
-            self.append_non_negative_binary_integer(value - 1, 7)
-        elif value <= 127:
-            self.append_non_negative_binary_integer(0x100 | value, 9)
-        else:
-            raise NotImplementedError(
-                'Normally small length number >127 is not yet supported.')
-
-    def append_constrained_whole_number(self,
-                                        value,
-                                        minimum,
-                                        maximum,
-                                        number_of_bits):
-        _range = (maximum - minimum + 1)
-        value -= minimum
-
-        if _range <= 255:
-            self.append_non_negative_binary_integer(value, number_of_bits)
-        elif _range == 256:
-            self.align_always()
-            self.append_non_negative_binary_integer(value, 8)
-        elif _range <= 65536:
-            self.align_always()
-            self.append_non_negative_binary_integer(value, 16)
-        else:
-            self.align_always()
-            self.append_non_negative_binary_integer(value, number_of_bits)
-
-    def append_unconstrained_whole_number(self, value):
-        number_of_bits = value.bit_length()
-
-        if value < 0:
-            number_of_bytes = ((number_of_bits + 7) // 8)
-            value = ((1 << (8 * number_of_bytes)) + value)
-
-            if (value & (1 << (8 * number_of_bytes - 1))) == 0:
-                value |= (0xff << (8 * number_of_bytes))
-                number_of_bytes += 1
-        elif value > 0:
-            number_of_bytes = ((number_of_bits + 7) // 8)
-
-            if number_of_bits == (8 * number_of_bytes):
-                number_of_bytes += 1
-        else:
-            number_of_bytes = 1
-
-        self.append_length_determinant(number_of_bytes)
-        self.append_non_negative_binary_integer(value,
-                                                8 * number_of_bytes)
-
-    def __repr__(self):
-        return format_bytes(self.as_bytearray())
 
 
 def compile_dict(specification, numeric_enums=False):
