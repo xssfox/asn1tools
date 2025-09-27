@@ -38,10 +38,10 @@ class Encoder(per.Encoder):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.bif = [] # TODO probably change from a list to bits at some point
+        self.bitfield = [] # TODO probably change from a list to bits at some point
         
     def append_bitfield(self,data):
-        self.bif.append(data)
+        self.bitfield.append(data)
 
     def align(self):
         pass
