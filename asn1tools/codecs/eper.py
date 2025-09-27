@@ -40,7 +40,7 @@ class Encoder(per.Encoder):
         super().__init__(*args, **kwargs)
         self.bif = [] # TODO probably change from a list to bits at some point
         
-    def append_bif(self,data):
+    def append_bitfield(self,data):
         self.bif.append(data)
 
     def align(self):
@@ -314,13 +314,15 @@ class OffsetFieldMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         raise NotImplemented
+    
+
 class BitFieldMixin:
     """
     Supplies the data for Byte Filed (BIF) if required
     """
     def encode(self,data,encoder):
         super(BitFieldMixin, self).encode( data, encoder)
-        encoder.append_bif(bool(data))
+        encoder.append_bitfield(bool(data))
 
     def decode(self,decoder):
         raise NotImplemented
