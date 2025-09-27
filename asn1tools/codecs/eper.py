@@ -16,7 +16,6 @@ from .per import Type
 from .per import Real
 from .per import Null
 from .per import ObjectIdentifier
-from .per import Sequence
 from .per import Set
 from .per import UTF8String
 from .per import GeneralString
@@ -226,6 +225,7 @@ class Integer(Type):
 class BitString(per.BitString):
 
     def encode(self, data, encoder):
+        raise NotImplementedError
         data, number_of_bits = data
 
         if self.has_extension_marker:
@@ -248,6 +248,7 @@ class BitString(per.BitString):
         encoder.append_bits(data, number_of_bits)
 
     def decode(self, decoder):
+        raise NotImplementedError
         if self.has_extension_marker:
             if decoder.read_bit():
                 raise NotImplementedError(
@@ -353,7 +354,6 @@ class Enumerated(per.Enumerated):
 
 class Boolean( per.Boolean):
     def encode(self, data, encoder):
-        breakpoint()
         super(Boolean, self).encode(data, encoder.bitFieldEncoder)
     def decode(self,decoder):
         raise NotImplementedError
@@ -374,6 +374,19 @@ class SequenceOf(ArrayType):
                                          has_extension_marker,
                                          'SEQUENCE OF')
 
+class Sequence(per.Sequence):
+    def encode(self, data, encoder):
+        if self.optionals: # making a big assumption that optionals include defaults as well here - need to test.
+            for optional in self.optionals:
+                if optional.optional:
+                    encoder.bitFieldEncoder.append_bit(optional.name in data)
+                elif optional.name in data:
+                    encoder.bitFieldEncoder.append_bit(not optional.is_default(data[optional.name]))
+                else:
+                    encoder.bitFieldEncoder.append_bit(0)
+        super(Sequence, self).encode(data, encoder) # TODO encoding will need adjusting
+    def decode(self):
+        raise NotImplementedError
 
 class SetOf(ArrayType):
 
@@ -392,11 +405,22 @@ class SetOf(ArrayType):
 
 
 class Choice(per.Choice):
+    def encode(self,data, encoder):  # TODO need tests for n=1, n=2, n=128, n=129
+        if self.root_number_of_bits == 0:
+            pass # If an enum in a forrest with only one possible value does it get heard? (aka, there's no point encoding since both sides will know what the intended value should be)
+        elif self.root_number_of_bits >= 1 and self.root_number_of_bits <= 7:
+            super(Choice, self).encode(data, encoder.bitFieldEncoder)
+        elif self.root_number_of_bits > 7:
+            raise NotImplementedError
+        else:
+            raise ValueError()
 
     def encode_root_index(self, index, encoder):
+        raise NotImplementedError
         encoder.append_non_negative_binary_integer(index, self.root_number_of_bits)
 
     def decode_root_index(self, decoder):
+        raise NotImplementedError
         return decoder.read_non_negative_binary_integer(self.root_number_of_bits)
 
 
