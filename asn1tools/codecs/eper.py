@@ -37,6 +37,7 @@ class Encoder(per.Encoder):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.bitFieldEncoder = uper.Encoder()
+        self.offsetFieldRequired = False
         
     # TODO RULES AROUND BITFIELD LENGTH
 
@@ -191,22 +192,37 @@ class Integer(Type):
         size = self.maximum - self.minimum
         self.number_of_bits = integer_as_number_of_bits(size)
 
-    def encode(self, data, encoder):
-        if self.has_extension_marker:
-            if self.minimum <= data <= self.maximum:
-                encoder.append_bit(0)
-            else:
-                encoder.append_bit(1)
-                encoder.append_unconstrained_whole_number(data)
-                return
+    def encode(self, data, encoder): # TODO CONSTRAINED
+        if (-2^5 <= data) and (data <= 2^5-1 ):  # TODO TEST CASES FOR EACH TYPE
+            encoder.append_bits(bytes([0b00]),2) # LIN (length) 0b00
+            encoder.append_bits(bytes([data<< 2]),6)
+        elif (-2^35 <= data) and (data <= -((2^(5)+1))) and (2^5 <= data) and (data <= (2^35)-1):
+            raise NotImplementedError
+        elif (-2^67 <= data) and (data <= -((2^35)+1)) and (2^35 <= data) and (data <= (2^67)-1):
+            raise NotImplementedError
+        elif ((-((2^40)*8+4)) <= data) and (data <= -((2^67)+1)) and (2^67 <= data) and (data <= ((2^40)*8+4)-1):
+            raise NotImplementedError
+        elif (data <= -2^(40*8+4)) and (2^(40*8+4) <= data):
+            raise NotImplementedError
 
-        if self.number_of_bits is None:
-            encoder.append_unconstrained_whole_number(data)
-        else:
-            encoder.append_non_negative_binary_integer(data - self.minimum,
-                                                       self.number_of_bits)
+
+        # if self.has_extension_marker:
+        #     raise NotImplementedError
+        #     if self.minimum <= data <= self.maximum:
+        #         encoder.append_bit(0)
+        #     else:
+        #         encoder.append_bit(1)
+        #         encoder.append_unconstrained_whole_number(data)
+        #         return
+
+        # if self.number_of_bits is None:
+        #     encoder.append_unconstrained_whole_number(data)
+        # else:
+        #     encoder.append_non_negative_binary_integer(data - self.minimum,
+        #                                                self.number_of_bits)
 
     def decode(self, decoder):
+        raise NotImplementedError
         if self.has_extension_marker:
             if decoder.read_bit():
                 return decoder.read_unconstrained_whole_number()
@@ -225,6 +241,7 @@ class Integer(Type):
 class BitString(per.BitString):
 
     def encode(self, data, encoder):
+        self.offsetFieldRequired = True
         raise NotImplementedError
         data, number_of_bits = data
 
@@ -339,20 +356,27 @@ class OffsetFieldMixin:
     
 
 class Enumerated(per.Enumerated):
-    def encode(self,data, encoder):  # TODO need tests for n=1, n=2, n=128, n=129
-        if self.root_number_of_bits == 0:
-            pass # If an enum in a forrest with only one possible value does it get heard? (aka, there's no point encoding since both sides will know what the intended value should be)
-        elif self.root_number_of_bits >= 1 and self.root_number_of_bits <= 7:
-            super(Enumerated, self).encode(data, encoder.bitFieldEncoder)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.bitFieldUsed = False 
+        if self.root_number_of_bits >= 1 and self.root_number_of_bits <= 7:
+            self.bitFieldUsed = True 
         elif self.root_number_of_bits > 7:
             raise NotImplementedError
         else:
             raise ValueError()
+
+    def encode(self,data, encoder):  # TODO need tests for n=1, n=2, n=128, n=129
+        # note that we don't encode enums with one possible value.
+        if self.bitFieldUsed and self.root_number_of_bits >= 1:
+            super(Enumerated, self).encode(data, encoder.bitFieldEncoder)
+        else:
+            raise NotImplementedError
         #raise NotImplementedError TODO
     # def encode(self,data,encoder):
     #     raise NotImplementedError
 
-class Boolean( per.Boolean):
+class Boolean(per.Boolean):
     def encode(self, data, encoder):
         super(Boolean, self).encode(data, encoder.bitFieldEncoder)
     def decode(self,decoder):
@@ -374,17 +398,32 @@ class SequenceOf(ArrayType):
                                          has_extension_marker,
                                          'SEQUENCE OF')
 
-class Sequence(per.Sequence):
+class Sequence(per.Sequence): # TODO, need to do this for sets as well, maybe move into MembersType
     def encode(self, data, encoder):
         if self.optionals: # making a big assumption that optionals include defaults as well here - need to test.
             for optional in self.optionals:
+
+                # work out if we need offsetField
+                if type(optional) in [Boolean, BitString]: # TODO is this list longer?
+                    encoder.offsetFieldRequired = True
+                if type(optional) == Enumerated and optional.bitFieldUsed:
+                    encoder.offsetFieldRequired = True
+                # we don't need to check sequence as it'll check itself
+
+                print(optional.name)
                 if optional.optional:
+                    print(optional.name in data)
                     encoder.bitFieldEncoder.append_bit(optional.name in data)
                 elif optional.name in data:
+                    print(not optional.is_default(data[optional.name]))
                     encoder.bitFieldEncoder.append_bit(not optional.is_default(data[optional.name]))
                 else:
+                    print(False)
                     encoder.bitFieldEncoder.append_bit(0)
-        super(Sequence, self).encode(data, encoder) # TODO encoding will need adjusting
+        self.encode_root(data, encoder)
+    def encode_root(self, data, encoder):
+        for member in self.root_members:
+            self.encode_member(member, data, encoder)
     def decode(self):
         raise NotImplementedError
 
@@ -568,7 +607,10 @@ class CompiledType(per.CompiledType):
             # Add member location
             e.add_location(self._type)
             raise e
-        return encoder.as_bytearray()
+        if encoder.bitFieldEncoder.number_of_bits < 7:
+            encoder.bitFieldEncoder.chunks.insert(0, (0b0,1))
+        breakpoint()
+        return encoder.bitFieldEncoder.as_bytearray() + encoder.as_bytearray()
 
     def decode(self, data):
         decoder = Decoder(bytearray(data))

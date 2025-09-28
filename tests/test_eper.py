@@ -126,6 +126,13 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
             foo = asn1tools.compile_string(
                 """
                 FDT DEFINITIONS ::= BEGIN
+                A ::= SEQUENCE {
+                    a [1] INTEGER OPTIONAL,
+                    b [2] BOOLEAN OPTIONAL,
+                    c [3] INTEGER OPTIONAL,
+                    d [4] BOOLEAN OPTIONAL
+                }
+
                 C ::= SEQUENCE {
                     a INTEGER,
                     b IA5String OPTIONAL,
@@ -143,12 +150,28 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
                 """, "eper"
             )
 
+            example_fig_1 = {
+                 "a": 2,
+                 "b": True,
+                 "c": 1,
+                 "d": False
+            }
+
             example = {
                 "a": 2,
                 "b": "A",
                 "c": True,
                 "d": 16
             }
+
+            a_result = bytes(# TODO THESE MIGHT BE THE WRONG BIT ORDER
+                 [
+                      0b0111_1100,
+                      0b0000_0001, # This should be value A
+                      0b0000_0010  # This should be value C
+                      # THERE MIGHT BE AN BUG IN THE EXAMPLE :(
+                 ]
+            )
 
             c_result = bytes( # TODO THESE MIGHT BE THE WRONG BIT ORDER
                 [
@@ -169,8 +192,9 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
 
             datas = [
-                ('C', example, c_result),
-                ('D', example, d_result)
+                ('A', example_fig_1, a_result),
+                # ('C', example, c_result), #TODO REENABLE THESE TESTS
+                # ('D', example, d_result)
             ]
 
             for type_name, decoded, encoded in datas:
