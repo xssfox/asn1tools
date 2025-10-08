@@ -396,9 +396,7 @@ class Enumerated(per.Enumerated):
         # note that we don't encode enums with one possible value.
         if self.bitFieldUsed and self.root_number_of_bits >= 1:
             super(Enumerated, self).encode(data, encoder.bitFieldEncoder)
-            print(self)
-            print(encoder.bitFieldEncoder.number_of_bits)
-            print(bin(encoder.bitFieldEncoder.as_bytearray()[0]))
+
         else:
             raise NotImplementedError
         #raise NotImplementedError TODO
@@ -408,9 +406,6 @@ class Enumerated(per.Enumerated):
 class Boolean(per.Boolean):
     def encode(self, data, encoder):
         encoder.bitFieldEncoder.append_bit(data)
-        print(self)
-        print(encoder.bitFieldEncoder.number_of_bits)
-        print(bin(encoder.bitFieldEncoder.as_bytearray()[0]))
     def decode(self,decoder):
         raise NotImplementedError
     
@@ -448,9 +443,7 @@ class MembersType(per.MembersType): # TODO, need to do this for sets as well, ma
                     encoder.bitFieldEncoder.append_bit(not optional.is_default(data[optional.name]))
                 else:
                     encoder.bitFieldEncoder.append_bit(0)
-                print(self)
-                print(encoder.bitFieldEncoder.number_of_bits)
-                print(bin(encoder.bitFieldEncoder.as_bytearray()[0]))
+
         self.encode_root(data, encoder)
     def encode_root(self, data, encoder):
         for member in self.root_members:

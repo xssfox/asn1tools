@@ -279,7 +279,6 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
             a_result = bytes(# TODO THESE MIGHT BE THE WRONG BIT ORDER
                  [
-                      0b00000000, # tag?
                       0b01_000110, 
                       0b01_000110, 
                       0b1010_0000 
