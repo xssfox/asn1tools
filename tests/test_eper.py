@@ -30,11 +30,11 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
             Employees ::= SEQUENCE OF PersonalRecord
             PersonalRecord ::= SEQUENCE {
                 number INTEGER, sex ENUMERATED { male(0), female (1)},
-                age INTEGER, firstName PrintableString, lastName
-                PrintableString, single BOOLEAN, children ChildInformation
+                age INTEGER, firstName GeneralString, lastName
+                GeneralString, single BOOLEAN, children ChildInformation
                 OPTIONAL}
             ChildInformation ::= SEQUENCE OF SEQUENCE{
-                firstName PrintableString, age INTEGER
+                firstName GeneralString, age INTEGER
             }
             END
             """, "eper"
@@ -47,7 +47,7 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
                 "age": 30,
                 "firstName": "Taro",
                 "lastName": "Yamada",
-                "single": False,
+                "single": True, # NOTE THE EXAMPLE HAS THESE FLIPPED. I SUSPECT THIS IS AN ERROR IN THE EXAMPLE
                 "children": [{"firstName": "Jiro", "age": 3}]
             },
             {
@@ -56,7 +56,7 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
                 "age": 25,
                 "firstName": "Hana",
                 "lastName": "Sato",
-                "single": True
+                "single": False 
             }
         ]
 
@@ -78,7 +78,7 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
                     0x06, # lastname "Yamada"
                     0x59,
                     0x61,
-                    0x60,
+                    0x6d,
                     0x61, 
                     0x64,
                     0x61,
@@ -120,6 +120,147 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
         for type_name, decoded, encoded in datas:
             self.assert_encode_decode(foo, type_name, decoded, encoded)
+
+
+    def test_bif(self):
+        foo = asn1tools.compile_string(
+            """
+            US5638066 DEFINITIONS ::= BEGIN
+            Employees ::= SEQUENCE OF PersonalRecord
+            PersonalRecord ::= SEQUENCE {
+                a BOOLEAN,
+                b BOOLEAN,
+                c BOOLEAN,
+                d BOOLEAN,
+                e BOOLEAN,
+                f BOOLEAN,
+                g BOOLEAN
+            }
+            END
+            """, "eper"
+        )
+
+        a = [
+            {
+                "a": True,
+                "b": True,
+                "c": True,
+                "d": True,
+                "e": True,
+                "f": True,
+                "g": True
+            }
+        ]
+        
+        
+        result = bytes(
+            [
+                0xfe, # offset and bit field 
+                0x01
+            ]
+        )
+
+        datas = [
+            ('Employees', a, result)
+        ]
+
+        for type_name, decoded, encoded in datas:
+            self.assert_encode_decode(foo, type_name, decoded, encoded)
+
+    def test_bif_long(self):
+        foo = asn1tools.compile_string(
+            """
+            US5638066 DEFINITIONS ::= BEGIN
+            Employees ::= SEQUENCE OF PersonalRecord
+            PersonalRecord ::= SEQUENCE {
+                a BOOLEAN,
+                b BOOLEAN,
+                c BOOLEAN,
+                d BOOLEAN,
+                e BOOLEAN,
+                f BOOLEAN,
+                g BOOLEAN,
+                h BOOLEAN
+            }
+            END
+            """, "eper"
+        )
+
+        a = [
+            {
+                "a": True,
+                "b": True,
+                "c": True,
+                "d": True,
+                "e": True,
+                "f": True,
+                "g": True,
+                "h": True
+            }
+        ]
+        
+        
+        result = bytes(
+            [
+                0xff, # offset and bit field 
+                0x01
+            ]
+        )
+
+        datas = [
+            ('Employees', a, result)
+        ]
+
+        for type_name, decoded, encoded in datas:
+            self.assert_encode_decode(foo, type_name, decoded, encoded)
+
+    def test_off(self):
+        foo = asn1tools.compile_string(
+            """
+            US5638066 DEFINITIONS ::= BEGIN
+            Employees ::= SEQUENCE OF PersonalRecord
+            PersonalRecord ::= SEQUENCE {
+                a BOOLEAN OPTIONAL
+            }
+            END
+            """, "eper"
+        )
+
+        a = [
+            {
+                "a": True
+            }
+        ]
+        
+        b = [
+            {
+                "a": False
+            }
+        ]
+        
+        result_a = bytes(
+            [
+                0x60, # offset and bit field 
+                0x01
+            ]
+        )
+
+        result_b = bytes(
+            [
+                0x60, # offset and bit field 
+                0x01
+            ]
+        )
+
+        datas = [
+            ('Employees', a, result_a),
+            ('Employees', b, result_b)
+        ]
+
+        for type_name, decoded, encoded in datas:
+            self.assert_encode_decode(foo, type_name, decoded, encoded)
+
+
     def test_int_systems(self):
             foo = asn1tools.compile_string(
                 """
@@ -153,6 +294,7 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
             for type_name, decoded, encoded in datas:
                 self.assert_encode_decode(foo, type_name, decoded, encoded)
+
 
 
     def test_p3_fdt_systems(self):
@@ -201,9 +343,9 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
             a_result = bytes(# TODO THESE MIGHT BE THE WRONG BIT ORDER
                  [
                       0b0111_1100,
-                      0b0000_0001, # This should be value A
-                      0b0000_0010  # This should be value C
-                      # THERE MIGHT BE AN BUG IN THE EXAMPLE :(
+                      0b0000_0010, # THERE MIGHT BE AN BUG IN THE EXAMPLE :(
+                      0b0000_0001, # I've flipped these two ocets
+                      
                  ]
             )
 
@@ -226,7 +368,7 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
 
             datas = [
-                # ('A', example_fig_1, a_result),
+                ('A', example_fig_1, a_result),
                 ('C', example, c_result), #TODO REENABLE THESE TESTS
                 ('D', example, d_result)
             ]

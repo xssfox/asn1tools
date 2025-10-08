@@ -122,6 +122,9 @@ class KnownMultiplierStringType(per.KnownMultiplierStringType):
 class ArrayType(per.ArrayType):
 
     def encode(self, data, encoder):
+        if self.has_default() or self.optional:
+            encoder.offsetFieldRequired = True
+
         if self.has_extension_marker:
             if self.minimum <= len(data) <= self.maximum:
                 encoder.append_bit(0)
@@ -218,7 +221,6 @@ class Integer(Type):
             encoder.append_bits(bytes([(output_bytes[1]<<2) & 0b1111_1111]),6) # we need to burn the 4 used for headers + sign bit, then get the remaining 5 bits
 
             encoder.append_bits(output_bytes[2:],(ocet_length-2)*8)
-            breakpoint()
             
             
             
@@ -394,6 +396,9 @@ class Enumerated(per.Enumerated):
         # note that we don't encode enums with one possible value.
         if self.bitFieldUsed and self.root_number_of_bits >= 1:
             super(Enumerated, self).encode(data, encoder.bitFieldEncoder)
+            print(self)
+            print(encoder.bitFieldEncoder.number_of_bits)
+            print(bin(encoder.bitFieldEncoder.as_bytearray()[0]))
         else:
             raise NotImplementedError
         #raise NotImplementedError TODO
@@ -402,7 +407,10 @@ class Enumerated(per.Enumerated):
 
 class Boolean(per.Boolean):
     def encode(self, data, encoder):
-        super(Boolean, self).encode(data, encoder.bitFieldEncoder)
+        encoder.bitFieldEncoder.append_bit(data)
+        print(self)
+        print(encoder.bitFieldEncoder.number_of_bits)
+        print(bin(encoder.bitFieldEncoder.as_bytearray()[0]))
     def decode(self,decoder):
         raise NotImplementedError
     
@@ -422,7 +430,7 @@ class SequenceOf(ArrayType):
                                          has_extension_marker,
                                          'SEQUENCE OF')
 
-class Sequence(per.Sequence): # TODO, need to do this for sets as well, maybe move into MembersType
+class MembersType(per.MembersType): # TODO, need to do this for sets as well, maybe move into MembersType
     def encode(self, data, encoder):
         if self.optionals: # making a big assumption that optionals include defaults as well here - need to test.
             for optional in self.optionals:
@@ -440,6 +448,9 @@ class Sequence(per.Sequence): # TODO, need to do this for sets as well, maybe mo
                     encoder.bitFieldEncoder.append_bit(not optional.is_default(data[optional.name]))
                 else:
                     encoder.bitFieldEncoder.append_bit(0)
+                print(self)
+                print(encoder.bitFieldEncoder.number_of_bits)
+                print(bin(encoder.bitFieldEncoder.as_bytearray()[0]))
         self.encode_root(data, encoder)
     def encode_root(self, data, encoder):
         for member in self.root_members:
@@ -447,6 +458,29 @@ class Sequence(per.Sequence): # TODO, need to do this for sets as well, maybe mo
     def decode(self):
         raise NotImplementedError
 
+class Sequence(MembersType):
+
+    def __init__(self,
+                 name,
+                 root_members,
+                 additions):
+        super(Sequence, self).__init__(name,
+                                       root_members,
+                                       additions,
+                                       'SEQUENCE')
+
+
+class Set(MembersType):
+
+    def __init__(self,
+                 name,
+                 root_members,
+                 additions):
+        super(Set, self).__init__(name,
+                                  root_members,
+                                  additions,
+                                  'SET')
+        
 class SetOf(ArrayType):
 
     def __init__(self,
@@ -627,8 +661,15 @@ class CompiledType(per.CompiledType):
             # Add member location
             e.add_location(self._type)
             raise e
-        if encoder.bitFieldEncoder.number_of_bits < 7:
-            encoder.bitFieldEncoder.chunks.insert(0, (0b0,1))
+        if encoder.offsetFieldRequired:
+            bitFieldLength =  math.ceil(encoder.bitFieldEncoder.number_of_bits/8)
+            if encoder.bitFieldEncoder.number_of_bits < 7:
+                encoder.bitFieldEncoder.chunks.insert(0, (0b0,1))
+            elif bitFieldLength <= 63:
+                encoder.bitFieldEncoder.chunks.insert(0, (0b10_00_0000 ^ bitFieldLength,8))
+            else:
+                breakpoint()
+                raise NotImplementedError
         return encoder.bitFieldEncoder.as_bytearray() + encoder.as_bytearray()
 
     def decode(self, data):
