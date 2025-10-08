@@ -30,7 +30,7 @@ from .permitted_alphabet import PRINTABLE_STRING
 from .permitted_alphabet import IA5_STRING
 from .permitted_alphabet import BMP_STRING
 from .permitted_alphabet import VISIBLE_STRING
-
+import math
 
 class Encoder(per.Encoder):
 
@@ -193,16 +193,40 @@ class Integer(Type):
         self.number_of_bits = integer_as_number_of_bits(size)
 
     def encode(self, data, encoder): # TODO CONSTRAINED
-        if (-2^5 <= data) and (data <= 2^5-1 ):  # TODO TEST CASES FOR EACH TYPE
+        if (-pow(2,5) <= data) and (data <= pow(2,5)-1 ):  # TODO TEST CASES FOR EACH TYPE # TODO TEST CASE FOR NEGATIVE
             encoder.append_bits(bytes([0b00]),2) # LIN (length) 0b00
-            encoder.append_bits(bytes([data<< 2]),6)
-        elif (-2^35 <= data) and (data <= -((2^(5)+1))) and (2^5 <= data) and (data <= (2^35)-1):
+            encoder.append_bits(bytes([data.to_bytes(1,signed=True)[0]<< 2]),6)
+        elif ((-pow(2,35) <= data) and (data <= -((pow(2,5)+1)))) or ( (pow(2,5) <= data) and (data <= pow(2,35)-1)):
+
+            bit_length = data.bit_length()+1+4 #1 for signed/unsigned, 4 for the lin + header
+            ocet_length = math.ceil(bit_length/8)
+
+
+            output_bytes = data.to_bytes(ocet_length,signed=True)
+            
+            # 2 bits for lin header
+            # 2 bits for the number of additional ocets ( goes in 2nd ocet). eg our min is 2 ocets, 11b would be 5 ocets
+            encoder.append_bits(bytes([0b01_00_0000]),2) # LIN (length) 0b01
+                                                 # TODO a useful test here is 6 bits used for number, 8  bits used for number and 9 bits used for number
+            
+            encoder.append_bits(bytes([output_bytes[0]]),1) # sign bit
+
+            encoder.append_bits(bytes([((output_bytes[0]<<5) ^ (output_bytes[1]>>3))&0b1111_1111]),5) # we need to burn the 4 used for headers + sign bit, then get the remaining 5 bits
+
+            # do second ocet bits, this includes the ocet length, the remaining bits
+            encoder.append_bits(bytes([((ocet_length-2)).to_bytes(1)[0]<<6]),2)
+            encoder.append_bits(bytes([(output_bytes[1]<<2) & 0b1111_1111]),6) # we need to burn the 4 used for headers + sign bit, then get the remaining 5 bits
+
+            encoder.append_bits(output_bytes[2:],(ocet_length-2)*8)
+            breakpoint()
+            
+            
+            
+        elif ((-pow(2,67) <= data) and (data <= -((pow(2,35))+1))) or ((pow(2,35) <= data) and (data <= (pow(2,67))-1)):
             raise NotImplementedError
-        elif (-2^67 <= data) and (data <= -((2^35)+1)) and (2^35 <= data) and (data <= (2^67)-1):
+        elif (((-((pow(2,40))*8+4)) <= data) and (data <= -((pow(2,67))+1))) or ((pow(2,67) <= data) and (data <= ((pow(2,40))*8+4)-1)):
             raise NotImplementedError
-        elif ((-((2^40)*8+4)) <= data) and (data <= -((2^67)+1)) and (2^67 <= data) and (data <= ((2^40)*8+4)-1):
-            raise NotImplementedError
-        elif (data <= -2^(40*8+4)) and (2^(40*8+4) <= data):
+        elif (data <= -pow(2,(40*8+4))) or (pow(2,(40*8+4)) <= data):
             raise NotImplementedError
 
 
@@ -410,15 +434,11 @@ class Sequence(per.Sequence): # TODO, need to do this for sets as well, maybe mo
                     encoder.offsetFieldRequired = True
                 # we don't need to check sequence as it'll check itself
 
-                print(optional.name)
                 if optional.optional:
-                    print(optional.name in data)
                     encoder.bitFieldEncoder.append_bit(optional.name in data)
                 elif optional.name in data:
-                    print(not optional.is_default(data[optional.name]))
                     encoder.bitFieldEncoder.append_bit(not optional.is_default(data[optional.name]))
                 else:
-                    print(False)
                     encoder.bitFieldEncoder.append_bit(0)
         self.encode_root(data, encoder)
     def encode_root(self, data, encoder):
@@ -609,7 +629,6 @@ class CompiledType(per.CompiledType):
             raise e
         if encoder.bitFieldEncoder.number_of_bits < 7:
             encoder.bitFieldEncoder.chunks.insert(0, (0b0,1))
-        breakpoint()
         return encoder.bitFieldEncoder.as_bytearray() + encoder.as_bytearray()
 
     def decode(self, data):

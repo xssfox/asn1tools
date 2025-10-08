@@ -120,6 +120,40 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
         for type_name, decoded, encoded in datas:
             self.assert_encode_decode(foo, type_name, decoded, encoded)
+    def test_int_systems(self):
+            foo = asn1tools.compile_string(
+                """
+                FDT DEFINITIONS ::= BEGIN
+                A ::= SEQUENCE {
+                    a [1] INTEGER
+                }
+                END
+                """, "eper"
+            )
+
+            example = {
+                 "a": 100000,
+               
+            }
+
+            a_result = bytes(# TODO THESE MIGHT BE THE WRONG BIT ORDER
+                 [
+                      0b00000000, # tag?
+                      0b01_000110, 
+                      0b01_000110, 
+                      0b1010_0000 
+                 ]
+            )
+
+
+
+            datas = [
+                ('A', example, a_result),
+            ]
+
+            for type_name, decoded, encoded in datas:
+                self.assert_encode_decode(foo, type_name, decoded, encoded)
+
 
     def test_p3_fdt_systems(self):
             # These tests are from the Part Three FDT-Based System and Protocol Engineering document examples
@@ -192,9 +226,9 @@ class Asn1ToolsPerTest(Asn1ToolsBaseTest):
 
 
             datas = [
-                ('A', example_fig_1, a_result),
-                # ('C', example, c_result), #TODO REENABLE THESE TESTS
-                # ('D', example, d_result)
+                # ('A', example_fig_1, a_result),
+                ('C', example, c_result), #TODO REENABLE THESE TESTS
+                ('D', example, d_result)
             ]
 
             for type_name, decoded, encoded in datas:
